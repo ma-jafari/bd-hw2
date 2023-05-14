@@ -12,6 +12,7 @@ os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 
 def CountTrianglesColor(edges):
     # Create a defaultdict to store the neighbors of each vertex
+    #print("-----------"+str(type(edges))+"--------------")
     neighbors = defaultdict(set)
     if (edges[0] == -1):
         return [0]
@@ -39,14 +40,15 @@ def CountTrianglesColor(edges):
         return [triangle_count]
     
     
-def countTriangles2(colors_tuple, edges, rand_a, rand_b, p, num_colors):
+def countTriangles2(edges, rand_a, rand_b, p, num_colors):
     #We assume colors_tuple to be already sorted by increasing colors. Just transform in a list for simplicity
+    colors_tuple = edges[0]
     colors = list(colors_tuple)  
     #Create a dictionary for adjacency list
     neighbors = defaultdict(set)
     #Creare a dictionary for storing node colors
     node_colors = dict()
-    for edge in edges:
+    for edge in edges[1]:
 
         u, v = edge
         node_colors[u]= ((rand_a*u+rand_b)%p)%num_colors
@@ -71,18 +73,22 @@ def countTriangles2(colors_tuple, edges, rand_a, rand_b, p, num_colors):
                         if colors==triangle_colors:
                             triangle_count += 1
     # Return the total number of triangles in the graph
-    return triangle_count
+    return [triangle_count]
 
 def MR_ExactTC(edges, C):
+    start_time = int(round(time.time() * 1000000))
     p = 8191
     a = (rand.randint(0, p-1))
     b = (rand.randint(0, p-1))
-    def hashColor(vert):
-        return ((a*vert + b) % p) % C
+    
     triangles = (edges.flatMap(lambda edge: GenerateKeys(edge, C, a, b, p))
                  .groupByKey()
+                 .flatMap(lambda edge: countTriangles2(edge, a, b, p, C))
+                 .sum()
                  )
-    return triangles
+
+    elapsed_time = (int(round(time.time() * 1000000)) - start_time) // 1000000
+    return triangles, elapsed_time
 
 def GenerateKeys(edge, C, a, b, p):
     def hashColor(vert):
@@ -99,7 +105,7 @@ def GenerateKeys(edge, C, a, b, p):
     
 
 def MR_ApproxTCwithNodeColors(edges, C):
-    start_time = time.time_ns()
+    start_time = int(round(time.time() * 1000000))
     p = 8191
     a = (rand.randint(0, p-1))
     b = (rand.randint(0, p-1))
@@ -111,45 +117,70 @@ def MR_ApproxTCwithNodeColors(edges, C):
                                    else [(-1,(-2,-2))])                   
                      .groupByKey()
                      .flatMap(CountTrianglesColor)
-                     .sum()*(C**2)  )
+                     .sum()*(C**2)  
+                     )
 
-    elapsed_time = (time.time_ns() - start_time) // 1000000
+    elapsed_time = (int(round(time.time() * 1000000)) - start_time) // 1000000
     return triangles, elapsed_time
 
 def main():
-    assert len(sys.argv) == 4, "Usage: python G099HW1.py <C> <R> <file_path>"
-    global C, R  
-    C, R, data_path = sys.argv[1:]
-    assert C.isdigit() and R.isdigit(), "K and H must be both integers"
-    C, R = int(C), int(R)
-    assert os.path.isfile(data_path), "File or folder not found"
-    conf = SparkConf().set("spark.ui.showConsoleProgress", "false").setAppName('G099HW1').setMaster("local[*]")
+    if len(sys.argv) != 5:
+        print("Usage: python G099HW2.py <C> <R> <F> <file_path>")
+        sys.exit(1)
+    global C, R, F
+    C, R, F, data_path = sys.argv[1:]
+    if not C.isdigit() or not R.isdigit():
+        raise ValueError("C and R must be both integers")
+    if int(F) not in [0, 1]:
+        raise ValueError("F must be either 0 or 1")
+    C, R, F = int(C), int(R), int(F)
+    conf = SparkConf().set("spark.ui.showConsoleProgress", "false").setAppName('G099HW2').setMaster("local[*]")
     sc = SparkContext.getOrCreate(conf=conf)
-
+    if not sc._gateway.jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration()).exists(sc._gateway.jvm.org.apache.hadoop.fs.Path(data_path)):
+        raise FileNotFoundError("File not found: " + data_path)
     input = sc.textFile(data_path).sortBy(lambda x: randrange(1000000))
     edges = input.map(lambda x: tuple(map(int, x.strip().split(','))))
     numedges = edges.count()
-    smth = MR_ExactTC(edges, C).collect()
+    """
+    smth = MR_ExactTC(edges, C)
     print(smth)
-"""
+    smth2 = MR_ApproxTCwithNodeColors(edges, C)
+    print(smth2)
+    """
+    
     estimates = []
     running_times = []
-    for i in range(R):
-        estimate, run_time = MR_ApproxTCwithNodeColors(edges, C)
-        estimates.append(estimate)
-        running_times.append(run_time)
-    median_estimate = round(statistics.median(estimates))
-    median_time = round(sum(running_times) / R)
-    
-    # Print outputs
-    print("Dataset = ", data_path)
-    print("Number of edges = ", numedges)
-    print('Number of colors = ', C)
-    print('Number of Repetitions  = ', R)
-    print('Approximation through node coloring')
-    print('- Number of triangles (median over ', R, ' runs) = ', median_estimate)
-    print("- Average running time (median over ", R, " runs) = ", median_time, 'ms')   
-    """
+    if F == 0:
+        for i in range(R):
+            estimate, run_time = MR_ApproxTCwithNodeColors(edges, C)
+            estimates.append(estimate)
+            running_times.append(run_time)
+        median_estimate = round(statistics.median(estimates))
+        median_time = round(sum(running_times) / R)
+        # Print outputs
+        print("Dataset = ", data_path)
+        print("Number of edges = ", numedges)
+        print('Number of colors = ', C)
+        print('Number of Repetitions  = ', R)
+        print('Approximation algorithm with node coloring')
+        print('- Number of triangles (median over ', R, ' runs) = ', median_estimate)
+        print("- running time (average over ", R, " runs) = ", median_time, 'ms') 
+        
+    else:
+        for i in range(R):
+            nTriang, run_time = MR_ExactTC(edges, C)            
+            running_times.append(run_time)               
+        median_time = round(sum(running_times) / R)
+        
+        # Print outputs
+        print("Dataset = ", data_path)
+        print("Number of edges = ", numedges)
+        print('Number of colors = ', C)
+        print('Number of Repetitions  = ', R)
+        print('Exact algorithm with node coloring')
+        print('- Number of triangles = ', nTriang)
+        print("- Average running time (median over ", R, " runs) = ", median_time, 'ms')   
+
     
 
 if __name__ == "__main__":
