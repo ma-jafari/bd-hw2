@@ -132,13 +132,14 @@ def main():
     if int(F) not in [0, 1]:
         raise ValueError("F must be either 0 or 1")
     C, R, F = int(C), int(R), int(F)
-    conf = SparkConf().set("spark.ui.showConsoleProgress", "false").setAppName('G099HW2').setMaster("local[*]")
+    conf = SparkConf().set("spark.ui.showConsoleProgress", "false").setAppName('G099HW2')
+    conf.set("spark.locality.wait", "0s")
     sc = SparkContext.getOrCreate(conf=conf)
     if not sc._gateway.jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration()).exists(sc._gateway.jvm.org.apache.hadoop.fs.Path(data_path)):
         raise FileNotFoundError("File not found: " + data_path)
         
-    input = sc.textFile(data_path).sortBy(lambda x: randrange(1000000))
-    edges = input.map(lambda x: tuple(map(int, x.strip().split(','))))
+    input = sc.textFile(data_path).repartition(32).sortBy(lambda x: randrange(1000000)).cache()
+    edges = input.map(lambda x: tuple(map(int, x.strip().split(',')))).repartition(32)
     numedges = edges.count()    
     estimates = []
     running_times = []
